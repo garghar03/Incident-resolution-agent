@@ -1,0 +1,20 @@
+log_sources:
+  loki:
+    base_url: "http://loki.company.com:3100"
+    tenant_id: "${LOKI_TENANT_ID}"
+    token: "${LOKI_TOKEN}"
+
+  nfs:
+    base_path: "/nfs/logs"
+    file_patterns:
+      - "*.log"
+      - "*.out"
+      - "error*.log"  
+
+  splunk:
+    host: "splunk.company.com"
+    port: 8089
+    username: "${SPLUNK_USERNAME}"
+    password: "${SPLUNK_PASSWORD}"
+    index: "app_logs"  
+

@@ -1,0 +1,12 @@
+.env
+moved_originals_pre_src_migration/
+__pycache__/
+*.pyc
+rag/vector_store/
+rag/ingestion_state/
+.pytest_cache/
+.venv/
+build/
+dist/
+*.egg-info/
+tests/app/vector_store/

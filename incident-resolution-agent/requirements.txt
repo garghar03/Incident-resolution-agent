@@ -1,0 +1,10 @@
+splunk-sdk
+requests
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-huggingface
+chromadb
+sentence-transformers
+python-dotenv
+langgraph
