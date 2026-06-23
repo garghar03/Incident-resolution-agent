@@ -20,6 +20,14 @@ from .report import IncidentReport
 from .incident import IncidentAlert
 from .incident_workflow_state import IncidentWorkflowState
 
+from .metric import (
+    MetricAnalysisResult,
+    MetricPoint,
+    MetricSeries,
+    MetricSignal,
+    MetricsInsightResult
+)
+
 __all__ = [
     "FileIngestionRecord",
     "RunbookDocument",
@@ -36,4 +44,9 @@ __all__ = [
     "IncidentReport",
     "IncidentAlert",
     "IncidentWorkflowState",
+    "MetricAnalysisResult",
+    "MetricPoint",
+    "MetricSeries",
+    "MetricSignal",
+    "MetricsInsightResult"
 ]

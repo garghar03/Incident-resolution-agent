@@ -4,9 +4,7 @@ AI-powered incident resolution assistant that analyzes logs, retrieves runbooks,
 
 ## Overview
 
-This project helps investigate production incidents by combining deterministic analysis, runbook retrieval, and AI-assisted reasoning.
-
-The MVP focuses on log-based incident investigation. It accepts an incident alert, analyzes related logs, retrieves relevant runbooks, and generates a structured root cause report with evidence, confidence, recommended actions, cautions, and missing signals.
+MVP 1 is a log and runbook based root cause assistant. It accepts an `IncidentAlert`, analyzes log signals, retrieves relevant runbook guidance, and returns a structured `IncidentReport` with evidence, confidence, recommended actions, cautions, and missing signals.
 
 ## MVP 1 Flow
 
@@ -19,248 +17,168 @@ IncidentAlert
   -> IncidentReport
 ```
 
-## Key Features
-
-- Analyze incident logs for errors, warnings, trace IDs, and repeated failure patterns
-- Generate log insights such as suspected issue category, confidence, reasoning, and next checks
-- Retrieve relevant runbook guidance using a search request generated from incident context
-- Generate a final incident report with probable root cause, supporting evidence, and recommended actions
-- Support both simple class-based orchestration and LangGraph-based orchestration
-- Provide fallback reporting when workflow steps fail
-
 ## Project Structure
 
 ```text
-app/
+src/incident_resolution_agent/
   agents/
     log_insight_agent.py
-    runbook_retrieval_agent.py
     root_cause_agent.py
-
   analyzers/
     log_analyzer.py
-
-  ingestion/
-    runbook_ingestion.py
-
-  retrievers/
-    runbook_retriever.py
-
+    file_log_analyzer.py
+    loki_log_analyzer.py
+    splunk_log_analyzer.py
   models/
-    incident_models.py
-    log_models.py
-    runbook_models.py
-    report_models.py
-
-  orchestrator/
+    incident.py
     incident_workflow_state.py
-    incident_orchestrator.py
-    langgraph_incident_orchestrator.py
-
-  logs/
-  runbooks/
-
+    log.py
+    report.py
+    runbook_models.py
+  rag/
+    ingestion/
+      build_runbook_index.py
+    retrieval/
+      runbook_retriever.py
+      runbook_retrieval_agent.py
+  incident_orchestrator.py
+  langgraph_incident_orchestrator.py
 tests/
+data/runbooks/
 ```
 
-## Core Components
+## Design Principles
 
-| Component | Responsibility |
-|---|---|
-| `IncidentAlert` | Input model for incident details |
-| `Log Analyzer` | Parses and summarizes logs for the incident window |
-| `Log Insight Agent` | Converts log analysis into suspected issue, reasoning, and next checks |
-| `Runbook Retriever` | Searches runbook content for relevant remediation guidance |
-| `Runbook Retrieval Agent` | Wraps retrieval result into structured runbook guidance |
-| `Root Cause Agent` | Produces the final incident report |
-| `Incident Orchestrator` | Coordinates the complete workflow |
-| `LangGraph Orchestrator` | Graph-based workflow version using LangGraph |
-
-## Orchestration Options
-
-### 1. Class-Based Orchestrator
-
-The simple orchestrator is best for MVP development and debugging.
-
-```text
-validate_alert
-  -> analyze_logs
-  -> generate_log_insight
-  -> retrieve_runbook
-  -> generate_root_cause_report
-```
-
-### 2. LangGraph Orchestrator
-
-The LangGraph version models the same workflow as a state graph.
-
-```text
-START
-  -> validate_alert
-  -> analyze_logs
-  -> generate_log_insight
-  -> retrieve_runbook
-  -> generate_root_cause_report
-  -> END
-```
-
-If any step fails, the graph routes to:
-
-```text
-build_failure_report -> END
-```
-
-## Data Models
-
-### IncidentAlert
-
-Represents the incident input.
-
-```text
-incident_id
-service_name
-severity
-description
-start_time
-end_time
-```
-
-### IncidentReport
-
-Represents the final investigation output.
-
-```text
-incident_id
-service_name
-severity
-probable_root_cause
-issue_category
-confidence
-evidence
-recommended_actions
-cautions
-missing_signals
-human_summary
-fallback_used
-```
-
-## Example Output
-
-```text
-Incident ID: INC-1001
-Service: payment-service
-Severity: HIGH
-Issue Category: DATABASE
-Confidence: 0.86
-
-Probable Root Cause:
-Possible DB connection pool exhaustion
-
-Evidence:
-- High number of Hikari connection timeout errors
-- SQL transient connection exceptions detected
-- Relevant DB connection pool runbook matched
-
-Recommended Actions:
-- Check database max connection usage
-- Check Hikari active and idle connection metrics
-- Review slow queries during the incident window
-- Validate whether a recent deployment changed DB connection behavior
-```
+- Keep the orchestrator thin.
+- Keep log parsing, runbook retrieval, and root cause generation inside their own components.
+- Return structured outputs from every major step.
+- Prefer fallback reports over hard workflow crashes.
+- Use the same agents and models for class-based and LangGraph orchestration.
 
 ## Installation
 
-Create and activate a virtual environment:
-
 ```bash
 python -m venv .venv
-```
-
-On Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-On macOS/Linux:
-
-```bash
 source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
+pip install pytest
 ```
 
-If using LangGraph:
+On Windows PowerShell:
 
-```bash
-pip install langgraph
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install pytest
 ```
 
-## Running the Project
+## Run MVP 1
 
-Run the class-based orchestrator:
+Run the simple class-based orchestrator:
 
 ```bash
-python run_incident_analysis_without_langgraph.py
+python tests/run_incident_analysis_without_langgraph.py
 ```
 
 Run the LangGraph orchestrator:
 
 ```bash
-python run_incident_analysis_langgraph.py
+python tests/run_incident_analysis_langgraph.py
 ```
 
-## Testing
-
-Run tests with:
+Run the lightweight app demo:
 
 ```bash
-pytest
+PYTHONPATH=src python -m incident_resolution_agent.app
 ```
 
-Recommended MVP 1 test:
+## Run Tests
+
+With pytest:
+
+```bash
+PYTHONPATH=src:. pytest -q
+```
+
+Without pytest:
+
+```bash
+PYTHONPATH=src:. python -m unittest discover -s tests -p "test_*.py"
+```
+
+The main MVP 1 end-to-end test is:
 
 ```text
 IncidentAlert -> IncidentReport
 ```
 
-The test should verify that:
+It verifies that the orchestrator validates the alert, calls log analysis, generates log insight, retrieves runbook guidance, and returns a final incident report. It also verifies fallback behavior for invalid alerts.
 
-- The alert is validated
-- Logs are analyzed
-- Log insight is generated
-- Runbook guidance is retrieved
-- Root cause report is generated
-- Failure paths return a fallback report
+## Add Runbooks
 
-## MVP 1 Status
+Add markdown runbooks under:
 
-MVP 1 focuses on:
+```text
+data/runbooks/
+```
 
-- Log analysis
-- Runbook retrieval
-- Root cause report generation
-- Simple orchestration
-- Optional LangGraph orchestration
+For best retrieval results, include:
 
-## MVP 2 Roadmap
+- Clear title
+- Issue category, such as `DATABASE`, `KAFKA`, or `DOWNSTREAM_SERVICE`
+- Symptoms
+- Diagnosis steps
+- Recommended actions
+- Cautions
 
-MVP 2 will expand the assistant from log-only investigation to multi-signal incident investigation.
+Example:
 
-Planned additions:
+```text
+data/runbooks/db_connection_pool_exhaustion.md
+```
 
-- Metrics Agent
-- Deployment Change Agent
-- Trace or Dependency Agent
-- Incident Timeline
-- Confidence Scoring v2
-- Conditional LangGraph routing
+## Pass an Incident Alert
 
-Target MVP 2 flow:
+Create an `IncidentAlert` and pass it to the orchestrator:
+
+```python
+from datetime import datetime
+
+from incident_resolution_agent.incident_orchestrator import IncidentOrchestrator
+from incident_resolution_agent.models.incident import IncidentAlert
+
+alert = IncidentAlert(
+    incident_id="INC-1001",
+    service_name="payment-service",
+    severity="HIGH",
+    description="Payment failures increased suddenly",
+    start_time=datetime.fromisoformat("2026-06-10T10:15:00"),
+    end_time=datetime.fromisoformat("2026-06-10T10:45:00"),
+)
+
+report = orchestrator.handle_incident(alert)
+```
+
+## Switch Orchestrators
+
+Use the simple orchestrator for MVP debugging:
+
+```python
+from incident_resolution_agent.incident_orchestrator import IncidentOrchestrator
+```
+
+Use the LangGraph orchestrator when you want the graph-based workflow:
+
+```python
+from incident_resolution_agent.langgraph_incident_orchestrator import LangGraphIncidentOrchestrator
+```
+
+Both orchestrators follow the same MVP 1 flow and use the same model and agent interfaces.
+
+## MVP 2 Direction
+
+MVP 2 will expand the assistant from log-only investigation to multi-signal incident investigation:
 
 ```text
 IncidentAlert
@@ -274,17 +192,4 @@ IncidentAlert
   -> IncidentReport v2
 ```
 
-## Design Principles
-
-- Keep the orchestrator thin
-- Keep agents independently testable
-- Avoid mixing workflow logic with analysis logic
-- Return structured outputs from every step
-- Prefer fallback reports over hard crashes
-- Make the workflow easy to migrate from simple orchestration to LangGraph
-
-## Repository Description
-
-```text
-AI-powered incident resolution assistant that analyzes logs, retrieves runbooks, and generates probable root cause reports using agent orchestration with optional LangGraph workflows.
-```
+Recommended first MVP 2 component: metrics models and metrics analyzer.
