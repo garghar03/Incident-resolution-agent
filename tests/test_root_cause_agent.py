@@ -1,13 +1,29 @@
 from datetime import datetime
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(1, str(PROJECT_ROOT))
+
 
 from incident_resolution_agent.agents.root_cause_agent import RootCauseAgent
 from incident_resolution_agent.models.incident import IncidentAlert
 from incident_resolution_agent.models.log import GroupedError, LogAnalysisResult, LogInsightResult
+from incident_resolution_agent.models.metric import (
+    MetricAnalysisResult,
+    MetricSignal,
+    MetricsInsightResult,
+)
 from incident_resolution_agent.models.runbook_models import RunbookResult
 
 
-def main() -> None:
-    alert = IncidentAlert(
+def build_alert() -> IncidentAlert:
+    return IncidentAlert(
         incident_id="INC-1001",
         service_name="payment-service",
         severity="HIGH",
@@ -16,7 +32,9 @@ def main() -> None:
         end_time=datetime.fromisoformat("2026-06-10T10:45:00"),
     )
 
-    log_analysis_result = LogAnalysisResult(
+
+def build_log_analysis_result() -> LogAnalysisResult:
+    return LogAnalysisResult(
         service_name="payment-service",
         total_logs=5000,
         error_count=342,
@@ -42,7 +60,9 @@ def main() -> None:
         trace_ids=["abc-101", "abc-102"],
     )
 
-    log_insight_result = LogInsightResult(
+
+def build_log_insight_result() -> LogInsightResult:
+    return LogInsightResult(
         suspected_issue="Possible DB connection pool exhaustion",
         issue_category="DATABASE",
         confidence=0.87,
@@ -61,7 +81,9 @@ def main() -> None:
         fallback_used=False,
     )
 
-    runbook_result = RunbookResult(
+
+def build_runbook_result() -> RunbookResult:
+    return RunbookResult(
         matched_runbooks=["DB Connection Pool Exhaustion Runbook"],
         confidence=0.90,
         relevant_steps=[
@@ -84,12 +106,119 @@ def main() -> None:
         fallback_used=False,
     )
 
+
+def build_metric_analysis_result() -> MetricAnalysisResult:
+    alert = build_alert()
+
+    return MetricAnalysisResult(
+        service_name=alert.service_name,
+        baseline_window_start=datetime.fromisoformat("2026-06-10T09:45:00"),
+        baseline_window_end=datetime.fromisoformat("2026-06-10T10:15:00"),
+        analyzed_window_start=alert.start_time,
+        analyzed_window_end=alert.end_time,
+        total_metrics=3,
+        signals=[
+            MetricSignal(
+                metric_name="db.connection.pool.active",
+                signal_type="DB_POOL_ACTIVE_HIGH",
+                severity="WARN",
+                summary="DB pool active connections were high during the incident window.",
+                baseline_value=30.0,
+                incident_value=94.0,
+                change_percent=213.33,
+                evidence=["DB pool active connections increased from 30 to 94."],
+            ),
+            MetricSignal(
+                metric_name="db.connection.pool.pending",
+                signal_type="DB_POOL_PENDING",
+                severity="WARN",
+                summary="DB pool pending connections increased during the incident window.",
+                baseline_value=0.0,
+                incident_value=16.0,
+                change_percent=None,
+                evidence=["DB pool pending connections increased from 0 to 16."],
+            ),
+        ],
+        evidence=[
+            "DB pool active connections increased from 30 to 94.",
+            "DB pool pending connections increased from 0 to 16.",
+        ],
+        missing_metrics=[],
+        fallback_used=False,
+    )
+
+
+def build_metrics_insight_result() -> MetricsInsightResult:
+    return MetricsInsightResult(
+        suspected_issue="Possible database connection pool saturation",
+        issue_category="DATABASE",
+        confidence=0.88,
+        reasoning=(
+            "DB active connection usage was high and pending connections were detected "
+            "during the incident window."
+        ),
+        supporting_signals=[
+            "DB pool active connections were high during the incident window.",
+            "DB pool pending connections increased during the incident window.",
+        ],
+        next_checks=[
+            "Check database max connection usage.",
+            "Check Hikari active and pending connection metrics.",
+            "Check slow queries during the incident window.",
+        ],
+        recommended_runbook_query=(
+            "database connection pool saturation pending connections latency spike"
+        ),
+        fallback_used=False,
+    )
+
+def test_root_cause_agent_includes_metrics_evidence():
     agent = RootCauseAgent(llm=None)
+
     report = agent.generate_report(
-        alert=alert,
-        log_analysis_result=log_analysis_result,
-        log_insight_result=log_insight_result,
-        runbook_result=runbook_result,
+        alert=build_alert(),
+        log_analysis_result=build_log_analysis_result(),
+        log_insight_result=build_log_insight_result(),
+        runbook_result=build_runbook_result(),
+        metric_analysis_result=build_metric_analysis_result(),
+        metrics_insight_result=build_metrics_insight_result(),
+    )
+
+    evidence_text = " ".join(report.evidence)
+    missing_text = " ".join(report.missing_signals)
+
+    assert "Metrics Insight Agent suspected" in evidence_text
+    assert "Metric signal" in evidence_text
+    assert "Metrics data was not analyzed" not in missing_text
+    assert report.confidence >= 0.90
+
+
+def test_root_cause_agent_still_works_without_metrics():
+    agent = RootCauseAgent(llm=None)
+
+    report = agent.generate_report(
+        alert=build_alert(),
+        log_analysis_result=build_log_analysis_result(),
+        log_insight_result=build_log_insight_result(),
+        runbook_result=build_runbook_result(),
+    )
+
+    assert report.incident_id == "INC-1001"
+    assert report.service_name == "payment-service"
+    assert report.fallback_used is True
+    assert "Metrics data was not analyzed" in " ".join(report.missing_signals)
+
+
+def main() -> None:
+    agent = RootCauseAgent(llm=None)
+
+    report = agent.generate_report(
+        alert=build_alert(),
+        log_analysis_result=build_log_analysis_result(),
+        log_insight_result=build_log_insight_result(),
+        runbook_result=build_runbook_result(),
+        metric_analysis_result=build_metric_analysis_result(),
+        metrics_insight_result=build_metrics_insight_result(),
     )
 
     print("Incident Report")
@@ -123,4 +252,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main()   

@@ -21,12 +21,16 @@ class LangGraphIncidentOrchestrator(IncidentOrchestrator):
         log_insight_agent,
         runbook_retrieval_agent,
         root_cause_agent,
+        metrics_analyzer=None,
+        metrics_insight_agent=None,
     ):
         super().__init__(
             log_analyzer=log_analyzer,
             log_insight_agent=log_insight_agent,
             runbook_retrieval_agent=runbook_retrieval_agent,
             root_cause_agent=root_cause_agent,
+            metrics_analyzer=metrics_analyzer,
+            metrics_insight_agent=metrics_insight_agent,
         )
         self.graph = self._build_graph()
 
@@ -57,6 +61,8 @@ class LangGraphIncidentOrchestrator(IncidentOrchestrator):
         builder.add_node("validate_alert", self._validate_alert_node)
         builder.add_node("analyze_logs", self._analyze_logs_node)
         builder.add_node("generate_log_insight", self._generate_log_insight_node)
+        builder.add_node("analyze_metrics", self._analyze_metrics_node)
+        builder.add_node("generate_metrics_insight", self._generate_metrics_insight_node)
         builder.add_node("retrieve_runbook", self._retrieve_runbook_node)
         builder.add_node("generate_root_cause_report", self._generate_root_cause_report_node)
         builder.add_node("build_failure_report", self._build_failure_report_node)
@@ -74,6 +80,16 @@ class LangGraphIncidentOrchestrator(IncidentOrchestrator):
         )
         builder.add_conditional_edges(
             "generate_log_insight",
+            self._route_after_step,
+            {"continue": "analyze_metrics", "failure": "build_failure_report"},
+        )
+        builder.add_conditional_edges(
+            "analyze_metrics",
+            self._route_after_step,
+            {"continue": "generate_metrics_insight", "failure": "build_failure_report"},
+        )
+        builder.add_conditional_edges(
+            "generate_metrics_insight",
             self._route_after_step,
             {"continue": "retrieve_runbook", "failure": "build_failure_report"},
         )
@@ -106,10 +122,40 @@ class LangGraphIncidentOrchestrator(IncidentOrchestrator):
         except Exception as exc:
             state.errors.append(f"Log insight generation failed: {exc}")
         return state
+    
+    def _analyze_metrics_node(self, state: IncidentWorkflowState) -> IncidentWorkflowState:
+        if not self.metrics_analyzer:
+            return state
+
+        try:
+            state.metric_analysis_result = self.metrics_analyzer.analyze(state.alert)
+        except Exception as exc:
+            state.errors.append(f"Metric analysis failed: {exc}")
+
+        return state
+
+    def _generate_metrics_insight_node(
+        self,
+        state: IncidentWorkflowState,
+    ) -> IncidentWorkflowState:
+        if not self.metrics_insight_agent:
+            return state
+
+        try:
+            state.metrics_insight_result = self.metrics_insight_agent.analyze(
+                state.metric_analysis_result
+            )
+        except Exception as exc:
+            state.errors.append(f"Metrics insight generation failed: {exc}")
+
+        return state
 
     def _retrieve_runbook_node(self, state: IncidentWorkflowState) -> IncidentWorkflowState:
         try:
-            request = self._build_runbook_request(state.log_insight_result)
+            request = self._build_runbook_request(
+                log_insight_result=state.log_insight_result,
+                metrics_insight_result=state.metrics_insight_result,
+            )
             state.runbook_result = self.runbook_retrieval_agent.search(request)
         except Exception as exc:
             state.errors.append(f"Runbook retrieval failed: {exc}")

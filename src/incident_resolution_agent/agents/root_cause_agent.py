@@ -3,6 +3,7 @@ from typing import Any
 
 from incident_resolution_agent.models.incident import IncidentAlert
 from incident_resolution_agent.models.log import LogAnalysisResult, LogInsightResult
+from incident_resolution_agent.models.metric import MetricAnalysisResult, MetricsInsightResult
 from incident_resolution_agent.models.report import IncidentReport
 from incident_resolution_agent.models.runbook_models import RunbookResult
 
@@ -15,6 +16,8 @@ class RootCauseAgent:
     - IncidentAlert
     - LogAnalysisResult
     - LogInsightResult
+    - MetricsAnalysisResult
+    - MetricsInsightResult
     - RunbookResult
 
     It produces:
@@ -48,11 +51,15 @@ class RootCauseAgent:
         log_analysis_result: LogAnalysisResult,
         log_insight_result: LogInsightResult,
         runbook_result: RunbookResult,
+        metric_analysis_result:MetricAnalysisResult | None = None,
+        metrics_insight_result: MetricsInsightResult | None = None,
     ) -> IncidentReport:
         base_confidence = self._calculate_base_confidence(
             log_analysis_result=log_analysis_result,
             log_insight_result=log_insight_result,
             runbook_result=runbook_result,
+            metric_analysis_result=metric_analysis_result,
+            metrics_insight_result=metrics_insight_result,
         )
 
         if self.llm is None:
@@ -61,6 +68,8 @@ class RootCauseAgent:
                 log_analysis_result=log_analysis_result,
                 log_insight_result=log_insight_result,
                 runbook_result=runbook_result,
+                metric_analysis_result=metric_analysis_result,
+                metrics_insight_result=metrics_insight_result,
                 confidence=base_confidence,
                 fallback_reason="LLM was not configured.",
             )
@@ -71,6 +80,8 @@ class RootCauseAgent:
             log_insight_result=log_insight_result,
             runbook_result=runbook_result,
             base_confidence=base_confidence,
+            metric_analysis_result=metric_analysis_result,
+            metrics_insight_result=metrics_insight_result,
         )
 
         try:
@@ -91,6 +102,8 @@ class RootCauseAgent:
                 log_analysis_result=log_analysis_result,
                 log_insight_result=log_insight_result,
                 runbook_result=runbook_result,
+                metric_analysis_result=metric_analysis_result,
+                metrics_insight_result=metrics_insight_result,
                 confidence=base_confidence,
                 fallback_reason=f"LLM report generation failed: {ex}",
             )
@@ -100,20 +113,45 @@ class RootCauseAgent:
         log_analysis_result: LogAnalysisResult,
         log_insight_result: LogInsightResult,
         runbook_result: RunbookResult,
+        metric_analysis_result: MetricAnalysisResult | None = None,
+        metrics_insight_result: MetricsInsightResult | None = None,
     ) -> float:
         evidence_strength = self._calculate_evidence_strength(log_analysis_result)
 
-        confidence = (
-            log_insight_result.confidence * 0.60
-            + runbook_result.confidence * 0.30
-            + evidence_strength * 0.10
+        metrics_confidence = (
+            metrics_insight_result.confidence
+            if metrics_insight_result
+            else 0.0
         )
+
+        if metrics_insight_result:
+            confidence = (
+                log_insight_result.confidence * 0.40
+                + metrics_confidence * 0.30
+                + runbook_result.confidence * 0.20
+                + evidence_strength * 0.10
+            )
+        else:
+            confidence = (
+                log_insight_result.confidence * 0.60
+                + runbook_result.confidence * 0.30
+                + evidence_strength * 0.10
+            )
+
+        if metrics_insight_result:
+            if log_insight_result.issue_category == metrics_insight_result.issue_category:
+                confidence += 0.08
+            elif metrics_insight_result.issue_category != "UNKNOWN":
+                confidence -= 0.05
 
         if log_insight_result.fallback_used:
             confidence -= 0.10
 
         if runbook_result.fallback_used:
             confidence -= 0.10
+
+        if metrics_insight_result and metrics_insight_result.fallback_used:
+            confidence -= 0.05
 
         return round(max(0.0, min(confidence, 1.0)), 2)
 
@@ -139,6 +177,8 @@ class RootCauseAgent:
         log_insight_result: LogInsightResult,
         runbook_result: RunbookResult,
         base_confidence: float,
+        metric_analysis_result: MetricAnalysisResult | None = None,
+        metrics_insight_result: MetricsInsightResult | None = None,
     ) -> str:
         evidence = self._build_evidence(
             log_analysis_result=log_analysis_result,
@@ -203,6 +243,12 @@ Evidence to use:
 Missing signals to mention:
 {self._format_list(self._default_missing_signals())}
 
+Metrics analysis:
+{self._format_metric_analysis(metric_analysis_result)}
+
+Metrics insight:
+{self._format_metrics_insight(metrics_insight_result)}
+
 Return JSON exactly in this format:
 {{
   "probable_root_cause": "careful probable root cause",
@@ -220,6 +266,8 @@ Return JSON exactly in this format:
         log_analysis_result: LogAnalysisResult,
         log_insight_result: LogInsightResult,
         runbook_result: RunbookResult,
+        metric_analysis_result: MetricAnalysisResult | None = None,
+        metrics_insight_result: MetricsInsightResult | None = None,
     ) -> list[str]:
         evidence = [
             f"{log_analysis_result.error_count} ERROR logs and "
@@ -242,6 +290,19 @@ Return JSON exactly in this format:
 
         if log_insight_result.reasoning:
             evidence.append(f"Log insight reasoning: {log_insight_result.reasoning}")
+
+        if metrics_insight_result:
+            evidence.append(
+                f"Metrics Insight Agent suspected: {metrics_insight_result.suspected_issue} "
+                f"with confidence {metrics_insight_result.confidence}."
+            )
+
+        if metrics_insight_result.reasoning:
+            evidence.append(f"Metrics insight reasoning: {metrics_insight_result.reasoning}")
+
+        if metric_analysis_result and metric_analysis_result.signals:
+            for signal in metric_analysis_result.signals[:5]:
+                evidence.append(f"Metric signal: {signal.summary}")
 
         if runbook_result.matched_runbooks:
             evidence.append("Matched runbook(s): " + ", ".join(runbook_result.matched_runbooks))
@@ -269,13 +330,24 @@ Return JSON exactly in this format:
             return "- None"
         return "\n".join(f"- {item}" for item in items)
 
-    def _default_missing_signals(self) -> list[str]:
-        return [
-            "Metrics data was not analyzed in MVP 1.",
-            "Recent deployment or configuration history was not analyzed in MVP 1.",
-            "Distributed traces were not analyzed in MVP 1.",
-            "Infrastructure and Kubernetes state were not analyzed in MVP 1.",
-        ]
+    def _default_missing_signals(
+        self,
+        metric_analysis_result: MetricAnalysisResult | None = None,
+    ) -> list[str]:
+        missing = []
+
+        if metric_analysis_result is None:
+            missing.append("Metrics data was not analyzed.")
+
+        missing.extend(
+            [
+                "Recent deployment or configuration history was not analyzed.",
+                "Distributed traces were not analyzed.",
+                "Infrastructure and Kubernetes events were not analyzed.",
+            ]
+        )
+
+        return missing
 
     def _extract_response_text(self, response: Any) -> str:
         if isinstance(response, str):
@@ -363,6 +435,8 @@ Return JSON exactly in this format:
         log_analysis_result: LogAnalysisResult,
         log_insight_result: LogInsightResult,
         runbook_result: RunbookResult,
+        metric_analysis_result: MetricAnalysisResult | None,
+        metrics_insight_result: MetricsInsightResult | None,
         confidence: float,
         fallback_reason: str,
     ) -> IncidentReport:
@@ -370,10 +444,14 @@ Return JSON exactly in this format:
             log_analysis_result=log_analysis_result,
             log_insight_result=log_insight_result,
             runbook_result=runbook_result,
+            metric_analysis_result=metric_analysis_result,
+            metrics_insight_result=metrics_insight_result,
         )
 
         recommended_actions = self._deduplicate(
-            log_insight_result.next_checks + runbook_result.relevant_steps
+            log_insight_result.next_checks
+            + (metrics_insight_result.next_checks if metrics_insight_result else [])
+            + runbook_result.relevant_steps
         )
 
         if not recommended_actions:
@@ -383,11 +461,21 @@ Return JSON exactly in this format:
                 "Escalate to the service owner if the issue persists.",
             ]
 
-        probable_root_cause = (
-            log_insight_result.suspected_issue
-            if log_insight_result.suspected_issue
-            else "Unable to determine a probable root cause from available MVP 1 evidence."
-        )
+        if (
+            metrics_insight_result
+            and metrics_insight_result.issue_category == log_insight_result.issue_category
+            and metrics_insight_result.issue_category != "UNKNOWN"
+        ):
+            probable_root_cause = (
+                f"{log_insight_result.suspected_issue}; metrics also suggest "
+                f"{metrics_insight_result.suspected_issue}."
+            )
+        elif log_insight_result.suspected_issue:
+            probable_root_cause = log_insight_result.suspected_issue
+        elif metrics_insight_result:
+            probable_root_cause = metrics_insight_result.suspected_issue
+        else:
+            probable_root_cause = "Unable to determine a probable root cause from available evidence."
 
         human_summary = (
             f"The available evidence suggests: {probable_root_cause}. "
@@ -404,7 +492,7 @@ Return JSON exactly in this format:
             evidence=evidence,
             recommended_actions=recommended_actions,
             cautions=runbook_result.cautions,
-            missing_signals=self._default_missing_signals(),
+            missing_signals=self._default_missing_signals(metric_analysis_result=metric_analysis_result),
             human_summary=human_summary,
             fallback_used=True,
         )
@@ -421,3 +509,39 @@ Return JSON exactly in this format:
             result.append(item)
 
         return result
+
+
+def _format_metric_analysis(
+    self,
+    metric_analysis_result: MetricAnalysisResult | None,
+) -> str:
+    if metric_analysis_result is None:
+        return "Metrics were not analyzed."
+
+    if not metric_analysis_result.signals:
+        return "Metrics were analyzed, but no strong metric anomaly was detected."
+
+    lines = []
+    for signal in metric_analysis_result.signals:
+        lines.append(
+            f"- {signal.signal_type} | metric={signal.metric_name} | "
+            f"severity={signal.severity} | summary={signal.summary}"
+        )
+
+    return "\n".join(lines)
+
+
+def _format_metrics_insight(
+    self,
+    metrics_insight_result: MetricsInsightResult | None,
+) -> str:
+    if metrics_insight_result is None:
+        return "Metrics insight was not generated."
+
+    return (
+        f"suspected_issue: {metrics_insight_result.suspected_issue}\n"
+        f"issue_category: {metrics_insight_result.issue_category}\n"
+        f"confidence: {metrics_insight_result.confidence}\n"
+        f"reasoning: {metrics_insight_result.reasoning}\n"
+        f"next_checks:\n{self._format_list(metrics_insight_result.next_checks)}"
+    )

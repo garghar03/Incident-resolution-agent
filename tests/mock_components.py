@@ -4,6 +4,11 @@ from incident_resolution_agent.models.incident import IncidentAlert
 from incident_resolution_agent.models.log import GroupedError, LogAnalysisResult, LogInsightResult
 from incident_resolution_agent.models.report import IncidentReport
 from incident_resolution_agent.models.runbook_models import RunbookResult
+from incident_resolution_agent.models.metric import (
+    MetricAnalysisResult,
+    MetricSignal,
+    MetricsInsightResult,
+)
 
 
 class MockLogAnalyzer:
@@ -51,7 +56,12 @@ class MockLogInsightAgent:
 
 
 class MockRunbookRetrievalAgent:
+    def __init__(self):
+        self.last_request = None
+
     def search(self, request) -> RunbookResult:
+        self.last_request = request
+
         return RunbookResult(
             matched_runbooks=["DB Connection Pool Exhaustion Runbook"],
             confidence=0.90,
@@ -68,13 +78,40 @@ class MockRunbookRetrievalAgent:
             ],
             source_documents=["db_connection_pool_exhaustion.md"],
             retrieved_chunks=["db_connection_pool_exhaustion.md::chunk-0"],
-            summary="The matched runbook recommends checking database connection pool saturation, database max connections, and slow queries before remediation.",
+            summary=(
+                "The matched runbook recommends checking database connection pool "
+                "saturation, database max connections, and slow queries before remediation."
+            ),
             fallback_used=False,
         )
 
 
 class MockRootCauseAgent:
-    def generate_report(self, alert: IncidentAlert, log_analysis_result: LogAnalysisResult, log_insight_result: LogInsightResult, runbook_result: RunbookResult) -> IncidentReport:
+    def __init__(self):
+        self.last_metric_analysis_result = None
+        self.last_metrics_insight_result = None
+
+    def generate_report(
+        self,
+        alert,
+        log_analysis_result,
+        log_insight_result,
+        runbook_result,
+        metric_analysis_result=None,
+        metrics_insight_result=None,
+    ) -> IncidentReport:
+        self.last_metric_analysis_result = metric_analysis_result
+        self.last_metrics_insight_result = metrics_insight_result
+
+        evidence = [
+            f"{log_analysis_result.error_count} errors found during the incident window.",
+            f"Top error: {log_analysis_result.top_errors[0].message_pattern}",
+            f"Matched runbook: {runbook_result.matched_runbooks[0]}",
+        ]
+
+        if metrics_insight_result:
+            evidence.append(f"Metrics insight: {metrics_insight_result.suspected_issue}")
+
         return IncidentReport(
             incident_id=alert.incident_id,
             service_name=alert.service_name,
@@ -82,18 +119,86 @@ class MockRootCauseAgent:
             probable_root_cause=log_insight_result.suspected_issue,
             issue_category=log_insight_result.issue_category,
             confidence=0.86,
-            evidence=[
-                f"{log_analysis_result.error_count} errors found during the incident window.",
-                f"Top error: {log_analysis_result.top_errors[0].message_pattern}",
-                f"Matched runbook: {runbook_result.matched_runbooks[0]}",
-            ],
+            evidence=evidence,
             recommended_actions=log_insight_result.next_checks + runbook_result.relevant_steps,
             cautions=runbook_result.cautions,
             missing_signals=[
-                "Metrics data was not analyzed in MVP 1.",
-                "Deployment history was not analyzed in MVP 1.",
-                "Distributed traces were not analyzed in MVP 1.",
+                "Deployment history was not analyzed in this workflow.",
+                "Distributed traces were not analyzed in this workflow.",
             ],
             human_summary="Available evidence suggests database connection pool exhaustion.",
+            fallback_used=False,
+        )
+
+class MockMetricsAnalyzer:
+    def __init__(self):
+        self.called = False
+
+    def analyze(self, alert):
+        self.called = True
+
+        return MetricAnalysisResult(
+            service_name=alert.service_name,
+            baseline_window_start=alert.start_time,
+            baseline_window_end=alert.start_time,
+            analyzed_window_start=alert.start_time,
+            analyzed_window_end=alert.end_time,
+            total_metrics=3,
+            signals=[
+                MetricSignal(
+                    metric_name="db.connection.pool.active",
+                    signal_type="DB_POOL_ACTIVE_HIGH",
+                    severity="WARN",
+                    summary="DB pool active connections were high.",
+                    baseline_value=30.0,
+                    incident_value=94.0,
+                    change_percent=213.33,
+                    evidence=["DB pool active connections increased from 30 to 94."],
+                ),
+                MetricSignal(
+                    metric_name="db.connection.pool.pending",
+                    signal_type="DB_POOL_PENDING",
+                    severity="WARN",
+                    summary="DB pool pending connections were detected.",
+                    baseline_value=0.0,
+                    incident_value=16.0,
+                    change_percent=None,
+                    evidence=["DB pool pending connections increased from 0 to 16."],
+                ),
+            ],
+            evidence=[
+                "DB pool active connections increased from 30 to 94.",
+                "DB pool pending connections increased from 0 to 16.",
+            ],
+            missing_metrics=[],
+            fallback_used=False,
+        )
+    
+class MockMetricsInsightAgent:
+    def __init__(self):
+        self.called = False
+
+    def analyze(self, metric_analysis_result):
+        self.called = True
+
+        return MetricsInsightResult(
+            suspected_issue="Possible database connection pool saturation",
+            issue_category="DATABASE",
+            confidence=0.88,
+            reasoning=(
+                "DB active connection usage was high and pending connections "
+                "were detected during the incident window."
+            ),
+            supporting_signals=[
+                signal.summary for signal in metric_analysis_result.signals
+            ],
+            next_checks=[
+                "Check database max connection usage.",
+                "Check Hikari active and pending connection metrics.",
+                "Check slow queries during the incident window.",
+            ],
+            recommended_runbook_query=(
+                "database connection pool saturation pending connections latency spike"
+            ),
             fallback_used=False,
         )
